@@ -38,7 +38,7 @@ from transformers.utils import (
 )
 from transformers import IdeficsConfig
 from transformers.models.idefics.perceiver import IdeficsPerceiverResampler
-from transformers.models.idefics.vision import IdeficsVisionTransformer
+from text_generation_server.models.custom_modeling.idefics_vision import IdeficsVisionTransformer
 from text_generation_server.utils.layers import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -766,10 +766,10 @@ LLAMA_START_DOCSTRING = r"""
 """
 
 
-@add_start_docstrings(
-    "The bare LLaMA Model outputting raw hidden-states without any specific head on top.",
-    LLAMA_START_DOCSTRING,
-)
+# @add_start_docstrings(
+#     "The bare LLaMA Model outputting raw hidden-states without any specific head on top.",
+#     LLAMA_START_DOCSTRING,
+# )
 class IdeficsPreTrainedModel(PreTrainedModel):
     config_class = IdeficsConfig
     # base_model_prefix = "model"
@@ -882,7 +882,7 @@ class IdeficsModel(IdeficsPreTrainedModel):
 
         self.image_size = config.vision_config.image_size
         self.vision_config = config.vision_config
-        self.vision_model = IdeficsVisionTransformer(config.vision_config) #TODO LOOOOL
+        self.vision_model = IdeficsVisionTransformer(prefix="model.vision_model", config=config.vision_config, weights=weights) #TODO LOOOOL
 
         # Perceiver Resampler
         if config.use_resampler:
@@ -1215,50 +1215,6 @@ class IdeficsForVisionText2Text(IdeficsPreTrainedModel):
             weights=weights,
         )
 
-        # # Initialize weights and apply final processing
-        # self.post_init()
-
-    # def get_input_embeddings(self):
-    #     return self.model.embed_tokens
-
-    # def set_input_embeddings(self, value):
-    #     self.model.embed_tokens = value
-
-    # def get_output_embeddings(self):
-    #     return self.lm_head
-
-    # def set_output_embeddings(self, new_embeddings):
-    #     self.lm_head = new_embeddings
-
-    # def set_decoder(self, decoder):
-    #     self.model = decoder
-
-    # def get_decoder(self):
-    #     return self.model
-
-    # def tie_weights(self):
-    #     """
-    #     Overwrite `transformers.modeling_utils.PreTrainedModel.tie_weights` to handle the case of
-    #     IdeficsDecoupledLinear and IdeficsDecoupledEmbedding.
-    #     """
-    #     output_embeddings = self.get_output_embeddings()
-    #     input_embeddings = self.get_input_embeddings()
-
-    #     if getattr(self.config, "tie_word_embeddings", True):
-    #         output_embeddings.weight = input_embeddings.weight
-    #         if input_embeddings.num_additional_embeddings > 0:
-    #             assert output_embeddings.out_additional_features == input_embeddings.num_additional_embeddings
-    #             output_embeddings.additional_fc.weight = input_embeddings.additional_embedding.weight
-
-    #     if hasattr(output_embeddings, "out_features") and hasattr(input_embeddings, "num_embeddings"):
-    #         output_embeddings.out_features = input_embeddings.num_embeddings
-    #         if hasattr(output_embeddings, "out_additional_features") and hasattr(
-    #             input_embeddings, "num_additional_embeddings"
-    #         ):
-    #             output_embeddings.out_additional_features = input_embeddings.num_additional_embeddings
-
-    # @add_start_docstrings_to_model_forward(LLAMA_INPUTS_DOCSTRING)
-    # @replace_return_docstrings(output_type=CausalLMOutputWithPast, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
         input_ids: torch.LongTensor = None,
