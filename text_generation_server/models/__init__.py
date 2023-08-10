@@ -17,6 +17,7 @@ from text_generation_server.models.opt import OPTSharded
 from text_generation_server.models.galactica import GalacticaSharded
 from text_generation_server.models.santacoder import SantaCoder
 from text_generation_server.models.t5 import T5Sharded
+from text_generation_server.models.idefics import IDEFICSSharded
 from text_generation_server.models.gpt_neox import GPTNeoxSharded
 
 # The flag below controls whether to allow TF32 on matmul. This flag defaults to False
@@ -242,6 +243,15 @@ def get_model(
 
     elif model_type == "t5":
         return T5Sharded(
+            model_id,
+            revision,
+            quantize=quantize,
+            dtype=dtype,
+            trust_remote_code=trust_remote_code,
+        )
+
+    elif model_type == "idefics":
+        return IDEFICSSharded(
             model_id,
             revision,
             quantize=quantize,
