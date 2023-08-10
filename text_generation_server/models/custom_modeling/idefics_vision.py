@@ -78,13 +78,7 @@ class IdeficsVisionEmbeddings(nn.Module):
 
         self.class_embedding = nn.Parameter(weights.get_tensor(f"{prefix}.class_embedding"))
 
-        self.patch_embedding = nn.Conv2d( #TODO - how do we do that?
-            in_channels=config.num_channels,
-            out_channels=self.embed_dim,
-            kernel_size=self.patch_size,
-            stride=self.patch_size,
-            bias=False,
-        )
+        self.patch_embedding = nn.Conv2d.load(prefix=f"{prefix}.patch_embedding", weights=weights, bias=False)
 
         self.num_patches = (self.image_size // self.patch_size) ** 2
         self.num_positions = self.num_patches + 1
