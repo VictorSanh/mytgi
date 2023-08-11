@@ -45,6 +45,7 @@ from text_generation_server.utils.layers import (
     TensorParallelRowLinear,
     TensorParallelHead,
     PositionRotaryEmbedding,
+    FastLinear,
 )
 
 
@@ -178,14 +179,6 @@ def freeze_model(model, module_exceptions=[]):
 
 
 class IdeficsDecoupledPartialTPEmbedding(nn.Module):
-    # # Derived from https://pytorch.org/docs/stable/_modules/torch/nn/modules/sparse.html#Embedding
-    # """
-    # Implements a decoupling of parameters to allow freezing (or not) a subset of the embeddings. In practise, the
-    # regular `weight` can be trained or frozen (i.e. `partially_freeze=True`), and if `num_additional_embeddings` > 0,
-    # then it will create `num_additional_embeddings` additional parameters that are always trained. If
-    # `num_additional_embeddings=0`, then the module defaults back to the regular behavior of `nn.Embedding`.
-    # """
-
     def __init__(
         self,
         config,
@@ -194,7 +187,7 @@ class IdeficsDecoupledPartialTPEmbedding(nn.Module):
         super().__init__()
         self.num_embeddings = config.vocab_size
         self.weight = TensorParallelEmbedding(prefix="model.embed_tokens", weights=weights)
-        self.additional_weight = TensorParallelEmbedding(prefix="model.embed_tokens.additional_embedding", weights=weights) # This thing probably doesn't need to be sharded...
+        self.additional_weight = nn.Parameter(weights.get_tensor(f"model.embed_tokens.additional_embedding.weight"))
 
     def forward(self, input_ids):
         # Clone so that we don't modify the original input_ids later on
@@ -205,7 +198,7 @@ class IdeficsDecoupledPartialTPEmbedding(nn.Module):
 
         # for successful lookup replace input_ids with 0, the results of these will be discarded anyway
         input_ids[additional_vocab_indices] = 0
-        full_vector = torch.nn.functional.embedding(input_ids, self.weight)
+        full_vector = self.weight(input_ids)
 
         # overwrite the records with high indices
         full_vector[additional_vocab_indices] = additional_embeddings
@@ -228,12 +221,12 @@ class IdeficsDecoupledTensorParallelLinear(nn.Module):
         weights,
     ) -> None:
         super().__init__()
-        self.fc = TensorParallelColumnLinear.load(
-            config, prefix="lm_head", weights=weights, bias=config.enable_bias
+        self.fc = TensorParallelHead.load(
+            config=config, prefix="lm_head", weights=weights
         )
-        self.additional_fc = TensorParallelColumnLinear.load(
-            config, prefix="lm_head.additional_fc", weights=weights, bias=config.enable_bias
-        ) # Im pretty sure this thing doesn't need to be sharded...
+        self.additional_fc = FastLinear.load(
+            config=config, prefix="lm_head.additional_fc", weights=weights, bias=False,
+        )
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         output = self.fc(input)
@@ -297,46 +290,15 @@ class IdeficsRMSNorm(nn.Module):
         self.weight = nn.Parameter(weight)
         self.variance_epsilon = eps
 
-    def forward(self, hidden_states, residual=None):
-        if hidden_states.shape[-1] > 8192:
-            if residual is not None:
-                hidden_states += residual
-            residual = hidden_states
+    def forward(self, hidden_states):
+        variance = hidden_states.to(torch.float32).pow(2).mean(-1, keepdim=True)
+        hidden_states = hidden_states * torch.rsqrt(variance + self.variance_epsilon)
 
-            hidden_states = hidden_states.to(torch.float32)
-            variance = hidden_states.pow(2).mean(-1, keepdim=True)
-            hidden_states = hidden_states * torch.rsqrt(
-                variance + self.variance_epsilon
-            )
+        # convert into half-precision if necessary
+        if self.weight.dtype in [torch.float16, torch.bfloat16]:
+            hidden_states = hidden_states.to(self.weight.dtype)
 
-            # convert into half-precision if necessary
-            if self.weight.dtype in [torch.float16, torch.bfloat16]:
-                hidden_states = hidden_states.to(self.weight.dtype)
-
-            return self.weight * hidden_states, residual
-        else:
-            # faster post attention rms norm
-            normed_hidden_states, res, *rest = dropout_layer_norm.dropout_add_ln_fwd(
-                hidden_states,
-                residual,
-                self.weight,
-                None,
-                None,
-                None,
-                None,
-                None,
-                0.0,
-                self.variance_epsilon,
-                1.0,
-                0,
-                None,
-                False,
-                True,  # Activate RMSNorm
-            )
-            if res is None:
-                res = hidden_states
-
-            return normed_hidden_states, res
+        return self.weight * hidden_states
 
 
 # this was adapted from LlamaRotaryEmbedding
@@ -475,9 +437,10 @@ class IdeficsAttention(nn.Module):
         self.o_proj = TensorParallelRowLinear.load(
             config, prefix=f"{prefix}.o_proj", weights=weights, bias=False
         )
-        self.rotary_emb = PositionRotaryEmbedding.load(
-            prefix=f"{prefix}.rotary_emb", weights=weights
-        )
+        # self.rotary_emb = PositionRotaryEmbedding.load(
+        #     prefix=f"{prefix}.rotary_emb", weights=weights
+        # )
+        self.rotary_emb = IdeficsEmbedding(self.head_dim, device="cuda:0") #TO Verify, i did not replace by since it looks like it is specfic to `PositionRotaryEmbedding` and flash
 
         self.qk_layer_norms = qk_layer_norms
         if self.qk_layer_norms:
@@ -523,6 +486,11 @@ class IdeficsAttention(nn.Module):
         if not is_cross_attention:
             cos, sin = self.rotary_emb(value_states, seq_len=max(kv_seq_len, q_len))
             query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin, position_ids)
+            # cos, sin = self.rotary_emb.get_cos_sin(
+            #     position_ids=torch.arange(),
+            #     max_s=max(kv_seq_len, q_len),
+            #     dtype=hidden_states.dtype,
+            # )
         # [bsz, nh, t, hd]
 
         if past_key_value is not None:
@@ -1209,11 +1177,18 @@ class IdeficsModel(IdeficsPreTrainedModel):
 
 
 class IdeficsForVisionText2Text(IdeficsPreTrainedModel):
-    def __init__(self, config, weights):
+    def __init__(
+        self,
+        config,
+        weights,
+    ):
         super().__init__(config)
-        self.model = IdeficsModel(config, weights)
+        self.model = IdeficsModel(
+            config=config,
+            weights=weights,
+        )
 
-        self.lm_head = IdeficsDecoupledPartialTPEmbedding(
+        self.lm_head = IdeficsDecoupledTensorParallelLinear(
             config=config,
             weights=weights,
         )
@@ -1285,7 +1260,7 @@ class IdeficsForVisionText2Text(IdeficsPreTrainedModel):
         hidden_states = outputs[0]
         logits = self.lm_head(hidden_states)
 
-        # loss = None
+        loss = None
         # if labels is not None:
         #     # Shift so that tokens < n predict n
         #     if attention_mask is not None:

@@ -443,14 +443,14 @@ class OPTDecoder(OPTPreTrainedModel):
 
         if config.word_embed_proj_dim != config.hidden_size:
             self.project_out = FastLinear.load(
-                config, prefix="model.decoder.project_out", bias=False
+                config, prefix="model.decoder.project_out", bias=False, weights=weights,
             )
         else:
             self.project_out = None
 
         if config.word_embed_proj_dim != config.hidden_size:
             self.project_in = FastLinear.load(
-                config, prefix="model.decoder.project_in", bias=False
+                config, prefix="model.decoder.project_in", bias=False, weights=weights,
             )
         else:
             self.project_in = None

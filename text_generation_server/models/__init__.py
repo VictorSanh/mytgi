@@ -9,6 +9,7 @@ from typing import Optional
 from text_generation_server.models.model import Model
 from text_generation_server.models.causal_lm import CausalLM
 from text_generation_server.models.flash_causal_lm import FlashCausalLM
+from text_generation_server.models.idefics_causal_lm import IdeficsCausalLM
 from text_generation_server.models.bloom import BLOOMSharded
 from text_generation_server.models.mpt import MPTSharded
 from text_generation_server.models.seq2seq_lm import Seq2SeqLM
@@ -35,6 +36,7 @@ __all__ = [
     "BLOOMSharded",
     "CausalLM",
     "FlashCausalLM",
+    "IdeficsCausalLM",
     "GalacticaSharded",
     "Seq2SeqLM",
     "SantaCoder",

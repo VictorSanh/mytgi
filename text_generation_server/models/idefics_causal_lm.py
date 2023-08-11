@@ -20,7 +20,7 @@ tracer = trace.get_tracer(__name__)
 
 
 @dataclass
-class CausalLMBatch(Batch):
+class IdeficsCausalLMBatch(Batch):
     batch_id: int
     requests: List[generate_pb2.Request]
     requests_idx_mapping: Dict[int, int]
@@ -68,7 +68,7 @@ class CausalLMBatch(Batch):
         tokenizer: PreTrainedTokenizerBase,
         dtype: torch.dtype,
         device: torch.device,
-    ) -> "CausalLMBatch":
+    ) -> "IdeficsCausalLMBatch":
         inputs = []
         next_token_choosers = []
         stopping_criterias = []
@@ -144,7 +144,7 @@ class CausalLMBatch(Batch):
         )
 
     @tracer.start_as_current_span("filter")
-    def filter(self, request_ids: List[int]) -> Optional["CausalLMBatch"]:
+    def filter(self, request_ids: List[int]) -> Optional["IdeficsCausalLMBatch"]:
         if len(request_ids) == 0:
             raise ValueError("Batch must have at least one request")
         if len(request_ids) == len(self):
@@ -243,7 +243,7 @@ class CausalLMBatch(Batch):
 
     @classmethod
     @tracer.start_as_current_span("concatenate")
-    def concatenate(cls, batches: List["CausalLMBatch"]) -> "CausalLMBatch":
+    def concatenate(cls, batches: List["IdeficsCausalLMBatch"]) -> "IdeficsCausalLMBatch":
         # Used for padding
         total_batch_size = 0
         max_input_length = 0
@@ -448,7 +448,7 @@ class CausalLMBatch(Batch):
         return len(self.requests)
 
 
-class CausalLM(Model):
+class IdeficsCausalLM(Model):
     def __init__(
         self,
         model_id: str,
@@ -497,7 +497,7 @@ class CausalLM(Model):
             else:
                 tokenizer.add_special_tokens({"pad_token": "[PAD]"})
 
-        super(CausalLM, self).__init__(
+        super(IdeficsCausalLM, self).__init__(
             model=model,
             tokenizer=tokenizer,
             requires_padding=True,
@@ -506,8 +506,8 @@ class CausalLM(Model):
         )
 
     @property
-    def batch_type(self) -> Type[CausalLMBatch]:
-        return CausalLMBatch
+    def batch_type(self) -> Type[IdeficsCausalLMBatch]:
+        return IdeficsCausalLMBatch
 
     def decode(self, generated_ids: List[int]) -> str:
         return self.tokenizer.decode(
@@ -533,8 +533,8 @@ class CausalLM(Model):
 
     @tracer.start_as_current_span("generate_token")
     def generate_token(
-        self, batch: CausalLMBatch
-    ) -> Tuple[List[Generation], Optional[CausalLMBatch]]:
+        self, batch: IdeficsCausalLMBatch
+    ) -> Tuple[List[Generation], Optional[IdeficsCausalLMBatch]]:
         # slice the attention mask to the correct shape
         attention_mask = batch.attention_mask[:, : -batch.padding_right_offset]
 

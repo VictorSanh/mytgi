@@ -9,7 +9,7 @@ from transformers import (
     AutoProcessor,
 )
 
-from text_generation_server.models import CausalLM
+from text_generation_server.models import IdeficsCausalLM
 from text_generation_server.models.custom_modeling.idefics_modeling import (
     IdeficsForVisionText2Text,
 )
@@ -20,7 +20,7 @@ from text_generation_server.utils import (
 )
 
 
-class IDEFICSSharded(CausalLM):
+class IDEFICSSharded(IdeficsCausalLM):
     def __init__(
         self,
         model_id: str,
@@ -67,7 +67,7 @@ class IDEFICSSharded(CausalLM):
         model = IdeficsForVisionText2Text(config, weights)
 
         torch.distributed.barrier(group=self.process_group)
-        super(CausalLM, self).__init__(
+        super(IdeficsCausalLM, self).__init__(
             model=model,
             tokenizer=tokenizer,
             requires_padding=True,
@@ -88,7 +88,7 @@ class IDEFICSSharded(CausalLM):
         List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
     ]:
         from loguru import logger
-        logger.info(f"{self.device} {self.dtype}")
+        logger.info(f"{input_ids.size()}")
 
         # Model Forward
         outputs = self.model.forward(
@@ -96,7 +96,8 @@ class IDEFICSSharded(CausalLM):
             attention_mask=attention_mask,
             position_ids=position_ids,
             past_key_values=past_key_values,
-            pixel_values=torch.randn(1, 1, 3, 224, 224, device=self.device, dtype=self.dtype),
+            pixel_values=torch.randn(4, 1, 3, 224, 224, device=self.device, dtype=self.dtype),
+            image_attention_mask=torch.zeros(4, 1024, 1, device=self.device),
             use_cache=True,
         )
 
