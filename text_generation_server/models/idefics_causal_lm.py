@@ -117,6 +117,7 @@ class IdeficsCausalLMBatch(Batch):
         padding_right_offset = 0
         max_decode_tokens = 0
         for i, r in enumerate(pb.requests):
+            from loguru import logger; logger.info(f"{i} {r}")
             requests_idx_mapping[r.id] = i
             inputs.append(r.inputs)
             next_token_choosers.append(NextTokenChooser.from_pb(r.parameters, device))
