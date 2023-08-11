@@ -1,9 +1,13 @@
 import torch
 import inspect
+import re
+from io import BytesIO
+import base64
+from PIL import Image
 
 from dataclasses import dataclass
 from opentelemetry import trace
-from transformers import AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizerBase
+from transformers import AutoProcessor, AutoTokenizer, AutoModelForCausalLM, PreTrainedTokenizerBase, ProcessorMixin, IdeficsForVisionText2Text
 from typing import Optional, Tuple, List, Type, Dict
 
 from text_generation_server.models import Model
@@ -19,6 +23,35 @@ from text_generation_server.utils import NextTokenChooser, StoppingCriteria, Sam
 tracer = trace.get_tracer(__name__)
 
 
+# UTILS
+def base64_to_pil(encoded_image):
+    decoded_image = base64.b64decode(encoded_image)
+    pil_image = Image.open(BytesIO(decoded_image))
+    return pil_image
+
+def im_markdown_to_pil(im_markdown_str):
+    pattern = r'<img src="data:image/png;base64,([^"]+)" />'
+    match = re.search(pattern, im_markdown_str)
+    img_b64_str = match.group(1)
+    return base64_to_pil(img_b64_str)
+
+def split_str_on_im_markdown(string_with_potential_im_markdown):
+    """
+    Extract from a string (typically the user prompt string) the potentional images saved as a base64 representation
+    inside a markdown.
+    """
+    pattern = r'<img src="data:image/png;base64,([^"]+)" />'
+    parts = re.split(pattern, string_with_potential_im_markdown)
+    result = []
+    for i, part in enumerate(parts):
+        if i % 2 == 0:
+            result.append(part)
+        else:
+            img_tag = f'<img src="data:image/png;base64,{part.strip()}" />'
+            result.append(img_tag)
+    return result
+
+
 @dataclass
 class IdeficsCausalLMBatch(Batch):
     batch_id: int
@@ -29,6 +62,8 @@ class IdeficsCausalLMBatch(Batch):
     input_ids: torch.Tensor
     attention_mask: torch.Tensor
     position_ids: torch.Tensor
+    pixel_values: Optional[torch.Tensor]
+    image_attention_mask: Optional[torch.Tensor]
     past_key_values: Optional[List[Tuple]]
 
     # All tokens
@@ -66,6 +101,7 @@ class IdeficsCausalLMBatch(Batch):
         cls,
         pb: generate_pb2.Batch,
         tokenizer: PreTrainedTokenizerBase,
+        processor: ProcessorMixin, # Hack
         dtype: torch.dtype,
         device: torch.device,
     ) -> "IdeficsCausalLMBatch":
@@ -94,14 +130,38 @@ class IdeficsCausalLMBatch(Batch):
                 padding_right_offset, stopping_criteria.max_new_tokens
             )
 
-        tokenized_inputs = tokenizer(
-            inputs,
+        prompts = []
+        for inp in inputs:
+            splitted_inp = split_str_on_im_markdown(inp)
+            prompts.append(
+                [
+                    im_markdown_to_pil(s) if s.startswith('<img src="data:image/png;base64,') else s
+                    for s in splitted_inp
+                    if s != ""
+                ]
+            )
+
+        # tokenized_inputs = tokenizer(
+        #     inputs,
+        #     return_tensors="pt",
+        #     padding=True,
+        #     return_token_type_ids=False,
+        #     truncation=True,
+        #     max_length=max_truncation,
+        # ).to(device)
+        tokenized_inputs = processor(
+            prompts,
             return_tensors="pt",
             padding=True,
-            return_token_type_ids=False,
             truncation=True,
             max_length=max_truncation,
+            add_end_of_utterance_token=False, # Already taken care of inside the prompts, so bypassing the processor's handling of this token
         ).to(device)
+        # from loguru import logger; logger.info(tokenized_inputs)
+        # from loguru import logger; logger.info({k: v.size() for k,v in tokenized_inputs.items()})
+        # from loguru import logger; logger.info(processed_inputs)
+        # from loguru import logger; logger.info({k: v.size() for k,v in processed_inputs.items()})
+        # {'input_ids': torch.Size([4, 5]), 'attention_mask': torch.Size([4, 5]), 'pixel_values': torch.Size([4, 1, 3, 224, 224]), 'image_attention_mask': torch.Size([4, 5, 1])}
         for _ in pb.requests:
             input_len = tokenized_inputs["input_ids"].shape[1]
             prefix_offsets.append(input_len - 5)
@@ -111,12 +171,18 @@ class IdeficsCausalLMBatch(Batch):
         max_input_length = input_lengths.max()
 
         input_ids = tokenized_inputs["input_ids"]
+        pixel_values = tokenized_inputs["pixel_values"]
         # Allocate maximum attention_mask
         attention_mask = input_ids.new_zeros(
             (pb.size, max_input_length + padding_right_offset)
         )
         # Copy tokenizer attention_mask into fully allocated attention_mask
         attention_mask[:, :max_input_length] = tokenized_inputs["attention_mask"]
+        # Do the same for image_attention_mask
+        image_attention_mask = input_ids.new_zeros(
+            (pb.size, max_input_length + padding_right_offset, tokenized_inputs["pixel_values"].size(1))
+        )
+        image_attention_mask[:, :max_input_length, :] = tokenized_inputs["image_attention_mask"]
 
         position_ids = tokenized_inputs["attention_mask"].long().cumsum(-1) - 1
         position_ids.masked_fill_(tokenized_inputs["attention_mask"] == 0, 1)
@@ -124,6 +190,7 @@ class IdeficsCausalLMBatch(Batch):
 
         max_tokens = len(inputs) * (max_input_length + max_decode_tokens)
 
+        from loguru import logger; logger.info(f"pb.size {pb.size} padding_right_offset {padding_right_offset} max_decode_tokens {max_decode_tokens}")
         return cls(
             batch_id=pb.id,
             requests=pb.requests,
@@ -131,6 +198,8 @@ class IdeficsCausalLMBatch(Batch):
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
+            pixel_values=pixel_values,
+            image_attention_mask=image_attention_mask,
             past_key_values=None,
             all_input_ids=list(all_input_ids),
             input_lengths=input_lengths.tolist(),
@@ -474,7 +543,14 @@ class IdeficsCausalLM(Model):
             truncation_side="left",
             trust_remote_code=trust_remote_code,
         )
-        model = AutoModelForCausalLM.from_pretrained(
+        self.processor = AutoProcessor.from_pretrained(
+            model_id,
+            revision=revision,
+            padding_side="left",
+            truncation_side="left",
+            trust_remote_code=trust_remote_code,
+        )
+        model = IdeficsForVisionText2Text.from_pretrained(
             model_id,
             revision=revision,
             torch_dtype=dtype,
@@ -495,7 +571,7 @@ class IdeficsCausalLM(Model):
             elif tokenizer.eos_token_id is not None:
                 tokenizer.pad_token_id = tokenizer.eos_token_id
             else:
-                tokenizer.add_special_tokens({"pad_token": "[PAD]"})
+                tokenizer.add_special_tokens({"pad_token": "<unk>"})
 
         super(IdeficsCausalLM, self).__init__(
             model=model,
@@ -515,12 +591,20 @@ class IdeficsCausalLM(Model):
         )
 
     def forward(
-        self, input_ids, attention_mask, position_ids, past_key_values: Optional = None
+        self,
+        input_ids,
+        attention_mask,
+        position_ids,
+        pixel_values: Optional = None,
+        image_attention_mask: Optional = None,
+        past_key_values: Optional = None,
     ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
         # Model Forward
         kwargs = {
             "input_ids": input_ids,
             "attention_mask": attention_mask,
+            "pixel_values": pixel_values,
+            "image_attention_mask": image_attention_mask,
             "past_key_values": past_key_values,
             "use_cache": True,
             "return_dict": True,
@@ -537,12 +621,15 @@ class IdeficsCausalLM(Model):
     ) -> Tuple[List[Generation], Optional[IdeficsCausalLMBatch]]:
         # slice the attention mask to the correct shape
         attention_mask = batch.attention_mask[:, : -batch.padding_right_offset]
+        # image_attention_mask = batch.image_attention_mask[:, : -batch.padding_right_offset, :]
 
         logits, past = self.forward(
-            batch.input_ids,
-            attention_mask,
-            batch.position_ids,
-            batch.past_key_values,
+            input_ids=batch.input_ids,
+            attention_mask=attention_mask,
+            # pixel_values=batch.pixel_values,
+            # image_attention_mask=image_attention_mask,
+            position_ids=batch.position_ids,
+            past_key_values=batch.past_key_values,
         )
 
         # Results

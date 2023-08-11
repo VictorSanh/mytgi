@@ -53,7 +53,13 @@ class IDEFICSSharded(IdeficsCausalLM):
             truncation_side="left",
             trust_remote_code=trust_remote_code,
         )
-        # tokenizer.bos_token_id = config.decoder_start_token_id
+        self.processor = AutoProcessor.from_pretrained(
+            model_id,
+            revision=revision,
+            padding_side="left",
+            truncation_side="left",
+            trust_remote_code=trust_remote_code,
+        )
 
         torch.distributed.barrier(group=self.process_group)
         filenames = weight_files(model_id, revision=revision, extension=".safetensors")
@@ -82,22 +88,23 @@ class IDEFICSSharded(IdeficsCausalLM):
         input_ids,
         attention_mask,
         position_ids,
+        # pixel_values,
+        # image_attention_mask,
         past_key_values: Optional = None,
     ) -> Tuple[
         torch.Tensor,
         List[Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]],
     ]:
-        from loguru import logger
-        logger.info(f"{input_ids.size()}")
-
         # Model Forward
         outputs = self.model.forward(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            past_key_values=past_key_values,
             pixel_values=torch.randn(4, 1, 3, 224, 224, device=self.device, dtype=self.dtype),
-            image_attention_mask=torch.zeros(4, 1024, 1, device=self.device),
+            image_attention_mask=torch.zeros(4, input_ids.size(1), 1, device=self.device),
+            # pixel_values=pixel_values,
+            # image_attention_mask=image_attention_mask,
+            past_key_values=past_key_values,
             use_cache=True,
         )
 
