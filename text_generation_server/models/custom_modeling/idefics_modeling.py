@@ -37,8 +37,8 @@ from transformers.utils import (
     replace_return_docstrings,
 )
 from transformers import IdeficsConfig
-from transformers.models.idefics.perceiver import IdeficsPerceiverResampler
 from text_generation_server.models.custom_modeling.idefics_vision import IdeficsVisionTransformer
+from text_generation_server.models.custom_modeling.idefics_perceiver import IdeficsPerceiverResampler
 from text_generation_server.utils.layers import (
     TensorParallelColumnLinear,
     TensorParallelEmbedding,
@@ -882,18 +882,24 @@ class IdeficsModel(IdeficsPreTrainedModel):
 
         self.image_size = config.vision_config.image_size
         self.vision_config = config.vision_config
-        self.vision_model = IdeficsVisionTransformer(prefix="model.vision_model", config=config.vision_config, weights=weights) #TODO LOOOOL
+        self.vision_model = IdeficsVisionTransformer(
+            prefix="model.vision_model",
+            config=config.vision_config,
+            weights=weights,
+        )
 
         # Perceiver Resampler
         if config.use_resampler:
             perceiver_config = config.perceiver_config
-            self.perceiver_resampler = IdeficsPerceiverResampler( #TODO LOOOOL
-                config,
-                config.vision_config.embed_dim,
-                perceiver_config.resampler_depth,
-                perceiver_config.resampler_n_heads,
-                perceiver_config.resampler_head_dim,
-                perceiver_config.resampler_n_latents,
+            self.perceiver_resampler = IdeficsPerceiverResampler(
+                prefix=f"model.perceiver_resampler",
+                config=config,
+                embed_dim=config.vision_config.embed_dim,
+                depth=perceiver_config.resampler_depth,
+                n_heads=perceiver_config.resampler_n_heads,
+                head_dim=perceiver_config.resampler_head_dim,
+                n_latents=perceiver_config.resampler_n_latents,
+                weights=weights,
             )
 
         self.layers = nn.ModuleList(
