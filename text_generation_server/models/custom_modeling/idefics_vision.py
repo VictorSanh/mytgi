@@ -142,7 +142,7 @@ class IdeficsVisionAttention(nn.Module):
         self.q_proj = TensorParallelColumnLinear.load(
             config, prefix=f"{prefix}.q_proj", weights=weights, bias=True
         )
-        self.out_proj = TensorParallelColumnLinear.load(
+        self.out_proj = TensorParallelRowLinear.load(
             config, prefix=f"{prefix}.out_proj", weights=weights, bias=True
         )
 
