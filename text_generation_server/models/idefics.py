@@ -44,7 +44,7 @@ class IDEFICSSharded(CausalLM):
             trust_remote_code=trust_remote_code,
         )
         config.quantize = quantize
-        config.vision_config = quantize
+        config.vision_config.quantize = quantize
 
         tokenizer = AutoTokenizer.from_pretrained(
             model_id,
