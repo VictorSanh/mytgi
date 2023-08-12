@@ -396,7 +396,7 @@ class IdeficsAttention(nn.Module):
         if (self.head_dim * self.num_heads) != self.hidden_size:
             raise ValueError(
                 f"hidden_size must be divisible by num_heads (got `hidden_size`: {self.hidden_size}"
-                f" and `num_heads`: {num_heads})."
+                f" and `num_heads`: {self.num_heads})."
             )
 
         self.is_cross_attention = is_cross_attention
@@ -1085,6 +1085,7 @@ class IdeficsModel(IdeficsPreTrainedModel):
                 cross_layer_interval,
                 gated_cross_attn_layers,
             ):
+                # TODO(ls): Add cross attention values to respective lists
                 if layer_idx % cross_layer_interval == 0:
                     xblock = gated_cross_attn_layers[layer_idx // cross_layer_interval]
                     outputs = xblock(
@@ -1242,6 +1243,11 @@ class IdeficsForVisionText2Text(IdeficsPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
+        from loguru import logger; logger.info(f"forward in idefics_modeling.py input_ids {input_ids.size()}")
+        from loguru import logger; logger.info(f"forward in idefics_modeling.py attention_mask {attention_mask.size()}")
+        from loguru import logger; logger.info(f"forward in idefics_modeling.py position_ids {position_ids.size()}")
+        from loguru import logger; logger.info(f"forward in idefics_modeling.py pixel_values {pixel_values.size()} {pixel_values.sum()}")
+        from loguru import logger; logger.info(f"forward in idefics_modeling.py image_attention_mask {image_attention_mask.size()} {image_attention_mask.sum()}")
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
