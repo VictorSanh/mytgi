@@ -70,6 +70,7 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
         )
 
     async def Prefill(self, request, context):
+        from loguru import logger; logger.info("prefill in server.py")
         if self.model.batch_type == IdeficsCausalLMBatch: #Hack, i would rather use kwargs in the `from_pb` call
             batch = self.model.batch_type.from_pb(
                 request.batch, self.model.tokenizer, self.model.processor, self.model.dtype, self.model.device
@@ -79,6 +80,7 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
                 request.batch, self.model.tokenizer, self.model.dtype, self.model.device
             )
 
+        from loguru import logger; logger.info(f"Prefill in server.py {batch}")
         generations, next_batch = self.model.generate_token(batch)
         self.cache.set(next_batch)
 
@@ -88,6 +90,7 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
         )
 
     async def Decode(self, request, context):
+        from loguru import logger; logger.info("decode in server.py")
         if len(request.batches) == 0:
             raise ValueError("Must provide at least one batch")
 
@@ -102,8 +105,10 @@ class TextGenerationService(generate_pb2_grpc.TextGenerationServiceServicer):
             raise ValueError("All batches are empty")
 
         if len(batches) > 1:
+            from loguru import logger; logger.info("decode in server.py - condition 1")
             batch = self.model.batch_type.concatenate(batches)
         else:
+            from loguru import logger; logger.info("decode in server.py - condition 2")
             batch = batches[0]
 
         generations, next_batch = self.model.generate_token(batch)

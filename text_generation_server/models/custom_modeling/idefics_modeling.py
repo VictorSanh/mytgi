@@ -1243,11 +1243,11 @@ class IdeficsForVisionText2Text(IdeficsPreTrainedModel):
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
         # decoder outputs consists of (dec_features, layer_state, dec_hidden, dec_attn)
-        from loguru import logger; logger.info(f"forward in idefics_modeling.py input_ids {input_ids.size()}")
-        from loguru import logger; logger.info(f"forward in idefics_modeling.py attention_mask {attention_mask.size()}")
-        from loguru import logger; logger.info(f"forward in idefics_modeling.py position_ids {position_ids.size()}")
-        from loguru import logger; logger.info(f"forward in idefics_modeling.py pixel_values {pixel_values.size()} {pixel_values.sum()}")
-        from loguru import logger; logger.info(f"forward in idefics_modeling.py image_attention_mask {image_attention_mask.size()} {image_attention_mask.sum()}")
+        from loguru import logger; logger.info(f"forward in idefics_modeling.py - {input_ids.size()=}")
+        from loguru import logger; logger.info(f"forward in idefics_modeling.py - {attention_mask.size()=}")
+        from loguru import logger; logger.info(f"forward in idefics_modeling.py - {position_ids.size()=}")
+        from loguru import logger; logger.info(f"forward in idefics_modeling.py - {pixel_values.size()=} {pixel_values.sum()=}")
+        from loguru import logger; logger.info(f"forward in idefics_modeling.py - {image_attention_mask.size()=} {image_attention_mask.sum()=}")
         outputs = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,

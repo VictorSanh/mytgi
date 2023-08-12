@@ -88,8 +88,8 @@ class IDEFICSSharded(IdeficsCausalLM):
         input_ids,
         attention_mask,
         position_ids,
-        # pixel_values,
-        # image_attention_mask,
+        pixel_values: Optional = None,
+        image_attention_mask: Optional = None,
         past_key_values: Optional = None,
     ) -> Tuple[
         torch.Tensor,
@@ -100,10 +100,8 @@ class IDEFICSSharded(IdeficsCausalLM):
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
-            pixel_values=torch.randn(4, 1, 3, 224, 224, device=self.device, dtype=self.dtype),
-            image_attention_mask=torch.zeros(4, input_ids.size(1), 1, device=self.device),
-            # pixel_values=pixel_values,
-            # image_attention_mask=image_attention_mask,
+            pixel_values=pixel_values,
+            image_attention_mask=image_attention_mask,
             past_key_values=past_key_values,
             use_cache=True,
         )

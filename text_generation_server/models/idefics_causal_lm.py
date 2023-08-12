@@ -117,7 +117,7 @@ class IdeficsCausalLMBatch(Batch):
         padding_right_offset = 0
         max_decode_tokens = 0
         for i, r in enumerate(pb.requests):
-            from loguru import logger; logger.info(f"{i} {r}")
+            from loguru import logger; logger.info(f"from_pb in idefics_causal_lm.py {i=} {r=}")
             requests_idx_mapping[r.id] = i
             inputs.append(r.inputs)
             next_token_choosers.append(NextTokenChooser.from_pb(r.parameters, device))
@@ -125,8 +125,8 @@ class IdeficsCausalLMBatch(Batch):
                 r.stopping_parameters, tokenizer
             )
             stopping_criterias.append(stopping_criteria)
-            max_truncation = max(max_truncation, r.truncate)
-            max_decode_tokens += stopping_criteria.max_new_tokens
+            max_truncation = max(max_truncation, r.truncate) #TODO: understand that
+            max_decode_tokens += stopping_criteria.max_new_tokens # TODO: I think it is just the maximum of tokens to generate in the WHOLE batch
             padding_right_offset = max(
                 padding_right_offset, stopping_criteria.max_new_tokens
             )
@@ -142,14 +142,6 @@ class IdeficsCausalLMBatch(Batch):
                 ]
             )
 
-        # tokenized_inputs = tokenizer(
-        #     inputs,
-        #     return_tensors="pt",
-        #     padding=True,
-        #     return_token_type_ids=False,
-        #     truncation=True,
-        #     max_length=max_truncation,
-        # ).to(device)
         tokenized_inputs = processor(
             prompts,
             return_tensors="pt",
@@ -158,15 +150,13 @@ class IdeficsCausalLMBatch(Batch):
             max_length=max_truncation,
             add_end_of_utterance_token=False, # Already taken care of inside the prompts, so bypassing the processor's handling of this token
         ).to(device)
-        # from loguru import logger; logger.info(tokenized_inputs)
-        # from loguru import logger; logger.info({k: v.size() for k,v in tokenized_inputs.items()})
-        # from loguru import logger; logger.info(processed_inputs)
+        from loguru import logger; logger.info(f"from_pb in idefics_causal_lm.py - {tokenized_inputs['input_ids']=}")
         # from loguru import logger; logger.info({k: v.size() for k,v in processed_inputs.items()})
-        # {'input_ids': torch.Size([4, 5]), 'attention_mask': torch.Size([4, 5]), 'pixel_values': torch.Size([4, 1, 3, 224, 224]), 'image_attention_mask': torch.Size([4, 5, 1])}
+        # {'input_ids': torch.Size([4, 5]), 'attention_mask': torch.Size([4, 5]), 'pixel_values': torch.Size([4, num_images, 3, 224, 224]), 'image_attention_mask': torch.Size([4, 5, num_images])}
         for _ in pb.requests:
             input_len = tokenized_inputs["input_ids"].shape[1]
-            prefix_offsets.append(input_len - 5)
-            read_offsets.append(input_len)
+            prefix_offsets.append(input_len - 5) # To decode without potential fallbacks errors
+            read_offsets.append(input_len) # To decode without potential fallbacks errors
 
         input_lengths = tokenized_inputs["attention_mask"].sum(1)
         max_input_length = input_lengths.max()
@@ -179,19 +169,20 @@ class IdeficsCausalLMBatch(Batch):
         )
         # Copy tokenizer attention_mask into fully allocated attention_mask
         attention_mask[:, :max_input_length] = tokenized_inputs["attention_mask"]
-        # Do the same for image_attention_mask
+        # Do the same for image_attention_mask - I CHANGED THINGS HERE - mostly testing for now
         image_attention_mask = input_ids.new_zeros(
             (pb.size, max_input_length + padding_right_offset, tokenized_inputs["pixel_values"].size(1))
         )
-        image_attention_mask[:, :max_input_length, :] = tokenized_inputs["image_attention_mask"]
+        # image_attention_mask = tokenized_inputs["image_attention_mask"]
+        from loguru import logger; logger.info(f"from_pb in idefics_causal_lm.py - image_attention_mask {image_attention_mask.size()}")
+
 
         position_ids = tokenized_inputs["attention_mask"].long().cumsum(-1) - 1
         position_ids.masked_fill_(tokenized_inputs["attention_mask"] == 0, 1)
-        all_input_ids = tokenized_inputs["input_ids"].T.split(1, dim=1)
+        all_input_ids = tokenized_inputs["input_ids"].T.split(1, dim=1) # It's input_ids but splitted into a tuple of tensors where each tensor is (seq_len, 1) size. It is then transformed into a list
 
         max_tokens = len(inputs) * (max_input_length + max_decode_tokens)
 
-        from loguru import logger; logger.info(f"pb.size {pb.size} padding_right_offset {padding_right_offset} max_decode_tokens {max_decode_tokens}")
         return cls(
             batch_id=pb.id,
             requests=pb.requests,
@@ -215,6 +206,8 @@ class IdeficsCausalLMBatch(Batch):
 
     @tracer.start_as_current_span("filter")
     def filter(self, request_ids: List[int]) -> Optional["IdeficsCausalLMBatch"]:
+        from loguru import logger; logger.info(f"filter in idefics_causal_lm.py")
+        # It deletes requests from the batch. For instance when client lost connection
         if len(request_ids) == 0:
             raise ValueError("Batch must have at least one request")
         if len(request_ids) == len(self):
@@ -272,6 +265,16 @@ class IdeficsCausalLMBatch(Batch):
             )
             + new_padding_right_offset,
         ]
+        # Do the same for pixel_values and image_attention_mask
+        pixel_values = self.pixel_values[keep_indices]
+        self.image_attention_mask = self.image_attention_mask[
+            keep_indices,
+            -(self.padding_right_offset + max_input_length) : (
+                self.attention_mask.shape[1] - self.padding_right_offset
+            )
+            + new_padding_right_offset,
+            :
+        ]
 
         # Ensure that past_key_values tensors can be updated in-place
         if type(self.past_key_values[0]) == tuple:
@@ -298,6 +301,7 @@ class IdeficsCausalLMBatch(Batch):
         self.requests = requests
         self.requests_idx_mapping = requests_idx_mapping
         self.input_ids = input_ids
+        self.pixel_values = pixel_values
         self.position_ids = position_ids
         self.all_input_ids = all_input_ids
         self.input_lengths = input_lengths
@@ -314,13 +318,17 @@ class IdeficsCausalLMBatch(Batch):
     @classmethod
     @tracer.start_as_current_span("concatenate")
     def concatenate(cls, batches: List["IdeficsCausalLMBatch"]) -> "IdeficsCausalLMBatch":
+        from loguru import logger; logger.info(f"concatenate in idefics_causal_lm.py")
+        # It adds new requests to the batch
         # Used for padding
         total_batch_size = 0
         max_input_length = 0
+        max_num_images = 0
         padding_right_offset = 0
         for batch in batches:
             total_batch_size += len(batch)
             max_input_length = max(max_input_length, batch.max_input_length)
+            max_num_images = max(max_num_images, batch.pixel_values.size(1))
             padding_right_offset = max(padding_right_offset, batch.padding_right_offset)
 
         # Batch attributes
@@ -338,6 +346,8 @@ class IdeficsCausalLMBatch(Batch):
         input_ids = None
         attention_mask = None
         position_ids = None
+        pixel_values = None
+        image_attention_mask = None
         past_key_values = []
 
         # Used for slicing correctly inside the tensors
@@ -380,6 +390,16 @@ class IdeficsCausalLMBatch(Batch):
                     (total_batch_size, max_input_length + padding_right_offset),
                 )
 
+            curr_batch_max_num_images = batch.pixel_values.size(1)
+            if pixel_values is None:
+                pixel_values = batch.pixel_values.new_zeros((total_batch_size, max_num_images, 3, 224, 224))
+            pixel_values[start_index:end_index, :curr_batch_max_num_images] = batch.pixel_values
+
+            if image_attention_mask is None:
+                image_attention_mask = batch.image_attention_mask.new_zeros(
+                    (total_batch_size, max_input_length + padding_right_offset, max_num_images)
+                )
+
             # We need to slice the attention mask to remove padding from previous steps
             # and to remove unused allocated space
             left_offset = max_input_length - batch.max_input_length
@@ -394,6 +414,17 @@ class IdeficsCausalLMBatch(Batch):
             ] = batch.attention_mask[
                 :,
                 batch_left_offset : -batch.padding_right_offset,
+            ]
+            from loguru import logger; logger.info(f"concatenate in idefics_causal_lm.py - image_attention_mask {image_attention_mask.size()}")
+            from loguru import logger; logger.info(f"concatenate in idefics_causal_lm.py - batch.image_attention_mask {batch.image_attention_mask.size()}")
+            image_attention_mask[
+                start_index:end_index,
+                left_offset:-padding_right_offset,
+                :curr_batch_max_num_images
+            ] = batch.image_attention_mask[
+                :,
+                batch_left_offset : - batch.padding_right_offset,
+                :
             ]
 
             # Create empty tensor
@@ -501,6 +532,8 @@ class IdeficsCausalLMBatch(Batch):
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
+            pixel_values=pixel_values,
+            image_attention_mask=image_attention_mask,
             past_key_values=past_key_values,
             all_input_ids=all_input_ids,
             input_lengths=input_lengths,
@@ -596,8 +629,8 @@ class IdeficsCausalLM(Model):
         input_ids,
         attention_mask,
         position_ids,
-        pixel_values: Optional = None,
-        image_attention_mask: Optional = None,
+        pixel_values,
+        image_attention_mask,
         past_key_values: Optional = None,
     ) -> Tuple[torch.Tensor, List[Tuple[torch.Tensor, torch.Tensor]]]:
         # Model Forward
@@ -620,16 +653,32 @@ class IdeficsCausalLM(Model):
     def generate_token(
         self, batch: IdeficsCausalLMBatch
     ) -> Tuple[List[Generation], Optional[IdeficsCausalLMBatch]]:
+        from loguru import logger; logger.info("generate_token in idefics_causal_lm.py  - enter")
         # slice the attention mask to the correct shape
         attention_mask = batch.attention_mask[:, : -batch.padding_right_offset]
-        # image_attention_mask = batch.image_attention_mask[:, : -batch.padding_right_offset, :]
+        if batch.input_ids.size(1) == 1:
+            # THIS is a hack: when calling idefics.generate, the first time, we need the whole image_attention_mask (size bs x max_seq_len x max_num_images),
+            # but the subsequent times, we only need the last attention mask along the `max_seq_len` dimension
+            # this is due to the nature IDEFICS: it's an encoder decoder, and so when decoding, only the currently generated
+            # token need to attend to the encoder hidden states (i.e. the vision encoder)
+            # Also see seq2seq_lm.Seq2SeqLM.generate_token which has roughly the same logic
+            image_attention_mask = batch.image_attention_mask[:, -batch.padding_right_offset].unsqueeze(1) #TODO: verify that index. i have a doubt whether there is +1 hanging around
+        else:
+            image_attention_mask = batch.image_attention_mask[:, : -batch.padding_right_offset]
+        from loguru import logger; logger.info(f"generate_token in idefics_causal_lm.py  - {batch.padding_right_offset=}")
+        from loguru import logger; logger.info(f"generate_token in idefics_causal_lm.py  - {batch.attention_mask.size()=}")
+        from loguru import logger; logger.info(f"generate_token in idefics_causal_lm.py  - {attention_mask.size()=}")
+        from loguru import logger; logger.info(f"generate_token in idefics_causal_lm.py  - {batch.image_attention_mask=}")
+        from loguru import logger; logger.info(f"generate_token in idefics_causal_lm.py  - {batch.image_attention_mask.size()=}")
+        from loguru import logger; logger.info(f"generate_token in idefics_causal_lm.py  - {image_attention_mask.size()=}")
+        from loguru import logger; logger.info(f"generate_token in idefics_causal_lm.py  - {image_attention_mask=}")
 
         logits, past = self.forward(
             input_ids=batch.input_ids,
             attention_mask=attention_mask,
-            # pixel_values=batch.pixel_values,
-            # image_attention_mask=image_attention_mask,
             position_ids=batch.position_ids,
+            pixel_values=batch.pixel_values,
+            image_attention_mask=image_attention_mask,
             past_key_values=batch.past_key_values,
         )
 
@@ -739,6 +788,7 @@ class IdeficsCausalLM(Model):
 
             # Update values
             batch.input_ids[i, 0] = next_token_id
+            from loguru import logger; logger.info(f"generate_token in idefics_causal_lm.py  - batch.input_ids 1 {batch.input_ids.size()}")
             batch.all_input_ids[i] = all_input_ids
             batch.input_lengths[i] = new_input_length
             batch.prefix_offsets[i] = prefix_offset
@@ -751,9 +801,11 @@ class IdeficsCausalLM(Model):
 
         # Slice unused values from prefill
         batch.input_ids = batch.input_ids[:, :1]
+        from loguru import logger; logger.info(f"generate_token in idefics_causal_lm.py  - batch.input_ids 2 {batch.input_ids.size()}")
 
         # Update attention_mask as we added a new token to input_ids
         batch.attention_mask[:, -batch.padding_right_offset] = 1
+        batch.image_attention_mask[:, -batch.padding_right_offset, :] = batch.image_attention_mask[:, -(batch.padding_right_offset+1), :]
         # Decrease right offset
         batch.padding_right_offset -= 1
 
@@ -763,4 +815,5 @@ class IdeficsCausalLM(Model):
         # Update past key values
         batch.past_key_values = past
 
+        from loguru import logger; logger.info(f"generate_token in idefics_causal_lm.py  - {stopped=}")
         return generations, batch
