@@ -4,6 +4,7 @@ import re
 from io import BytesIO
 import base64
 from PIL import Image
+import json
 
 from dataclasses import dataclass
 from opentelemetry import trace
@@ -133,14 +134,28 @@ class IdeficsCausalLMBatch(Batch):
 
         prompts = []
         for inp in inputs:
-            splitted_inp = split_str_on_im_markdown(inp)
-            prompts.append(
-                [
-                    im_markdown_to_pil(s) if s.startswith('<img src="data:image/png;base64,') else s
-                    for s in splitted_inp
-                    if s != ""
-                ]
-            )
+            # Each input is encoded into a list, where each element of this input list is either a string or a URL
+            from loguru import logger; logger.info(f"from_pb in idefics_causal_lm.py {inp=}")
+            if isinstance(inp, str):
+                prompts.append([inp])
+            elif isinstance(inp, list):
+                if not all(isinstance(item, str) for item in inp):
+                    raise ValueError("All elements in the list must be strings (text string or image URL)")
+                prompts.append(
+                    json.load(inp)
+                )
+            else:
+                raise ValueError("Unsupported type of input")
+            # I initially wanted to send the images in string base64 but they are too big to send in a consistent way...
+            # So resorting to uploading the image to a server and pulling them back
+            # splitted_inp = split_str_on_im_markdown(inp)
+            # prompts.append(
+            #     [
+            #         im_markdown_to_pil(s) if s.startswith('<img src="data:image/png;base64,') else s
+            #         for s in splitted_inp
+            #         if s != ""
+            #     ]
+            # )
 
         tokenized_inputs = processor(
             prompts,
