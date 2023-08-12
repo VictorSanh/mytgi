@@ -157,6 +157,9 @@ class IdeficsCausalLMBatch(Batch):
             #     ]
             # )
 
+        # The processor replaces the call to tokenizer, and
+        # a/ takes care of fetching images from the URL
+        # b/ generate the correct input_ids, attention_mask, pixel_values, image_attention_mask to feed to the model
         tokenized_inputs = processor(
             prompts,
             return_tensors="pt",
