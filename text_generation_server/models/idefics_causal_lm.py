@@ -288,7 +288,7 @@ class IdeficsCausalLMBatch(Batch):
         self.image_attention_mask = self.image_attention_mask[
             keep_indices,
             -(self.padding_right_offset + max_input_length) : (
-                self.attention_mask.shape[1] - self.padding_right_offset
+                self.image_attention_mask.shape[1] - self.padding_right_offset
             )
             + new_padding_right_offset,
             :
